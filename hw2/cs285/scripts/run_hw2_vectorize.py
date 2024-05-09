@@ -13,11 +13,13 @@ import numpy as np
 import torch
 from cs285.infrastructure import pytorch_util as ptu
 
-from cs285.infrastructure import utils
+from cs285.infrastructure import utils_vectorize as utils
 from cs285.infrastructure.logger import Logger
 from cs285.infrastructure.action_noise_wrapper import ActionNoiseWrapper
+from cs285.infrastructure.wrapper import VectorTimeLimitWrapper
 
 MAX_NVIDEO = 2
+NUM_ENVS = 4
 
 def run_training_loop(args):
     logger = Logger(args.logdir)
@@ -27,22 +29,31 @@ def run_training_loop(args):
     torch.manual_seed(args.seed)
     ptu.init_gpu(use_gpu=not args.no_gpu, gpu_id=args.which_gpu)
 
+# make the gym environment
+    # get environment specific values
+    single_env = gym.make(args.env_name, render_mode=None)
+    max_ep_len = args.ep_len or single_env.spec.max_episode_steps
 
-    env = gym.make(args.env_name, render_mode=None)
-    ob_dim = env.observation_space.shape[0]
-    discrete = isinstance(env.action_space, gym.spaces.Discrete)
-    ac_dim = env.action_space.n if discrete else env.action_space.shape[0]
+    # make vectorized environment
+    env = gym.vector.make(args.env_name, num_envs=NUM_ENVS)
+
+    ob_dim = single_env.observation_space.shape[0]
+    discrete = isinstance(single_env.action_space, gym.spaces.Discrete)
+    ac_dim = single_env.action_space.n if discrete else single_env.action_space.shape[0]
+    print("observation space dimensions : ", ob_dim)
+    print("action space dimensions : ", ac_dim)
 
     # add action noise, if needed
     if args.action_noise_std > 0:
         assert not discrete, f"Cannot use --action_noise_std for discrete environment {args.env_name}"
-        env = ActionNoiseWrapper(env, args.seed, args.action_noise_std)
+        single_env = ActionNoiseWrapper(single_env, args.seed, args.action_noise_std)
+        env = ActionNoiseWrapper(env, args.seed, args.action_noise_std, ob_dim, ac_dim)
 
-    max_ep_len = args.ep_len or env.spec.max_episode_steps
+    env = VectorTimeLimitWrapper(env, max_ep_len, ob_dim, ac_dim)
 
     # simulation timestep, will be used for video saving
     if hasattr(env, "model"):
-        fps = 1 / env.model.opt.timestep
+        fps = 1 / single_env.model.opt.timestep
     else:
         fps = env.env.metadata["render_fps"]
 
@@ -65,12 +76,11 @@ def run_training_loop(args):
 
     total_envsteps = 0
     start_time = time.time()
-
     for itr in range(args.n_iter):
         print(f"\n********** Iteration {itr} ************")
         # TODO: sample `args.batch_size` transitions using utils.sample_trajectories
         # make sure to use `max_ep_len`h
-        trajs, envsteps_this_batch = utils.sample_trajectories(env, agent.actor, args.batch_size, max_ep_len) #None, None  # TODO
+        trajs, envsteps_this_batch = utils.sample_trajectories_vectorize(env, agent.actor, args.batch_size) #None, None  # TODO
         total_envsteps += envsteps_this_batch
 
         # trajs should be a list of dictionaries of NumPy arrays, where each dictionary corresponds to a trajectory.
@@ -84,8 +94,8 @@ def run_training_loop(args):
             # save eval metrics                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                
             print("\nCollecting data for eval...")
             eval_trajs, eval_envsteps_this_batch = utils.sample_trajectories(
-                env, agent.actor, args.eval_batch_size, max_ep_len
-            )                                                                                   
+                single_env, agent.actor, args.eval_batch_size, max_ep_len
+            )                                                                               
 
             logs = utils.compute_metrics(trajs, eval_trajs)
             # compute additional metrics                        
@@ -105,20 +115,19 @@ def run_training_loop(args):
 
             logger.flush()
         
-        if args.video_log_freq != -1 and itr % (args.n_iter-1) == 0:
-            print("\nCollecting video rollouts...")
+        # if args.video_log_freq != -1 and itr % (args.n_iter-1) == 0:
+        #     print("\nCollecting video rollouts...")
+        #     eval_video_trajs = utils.sample_n_trajectories(
+        #         single_env, agent.actor, MAX_NVIDEO, max_ep_len, render=True
+        #     )
 
-            eval_video_trajs = utils.sample_n_trajectories(
-                env, agent.actor, MAX_NVIDEO, max_ep_len, render=True
-            )
-
-            logger.log_trajs_as_videos(
-                eval_video_trajs,
-                itr,
-                fps=fps,
-                max_videos_to_save=MAX_NVIDEO,
-                video_title="eval_rollouts",
-            )
+        #     logger.log_trajs_as_videos(
+        #         eval_video_trajs,
+        #         itr,
+        #         fps=fps,
+        #         max_videos_to_save=MAX_NVIDEO,
+        #         video_title="eval_rollouts",
+        #     )
 
 
 def main():
