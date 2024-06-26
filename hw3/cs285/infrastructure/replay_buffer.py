@@ -255,14 +255,14 @@ class MemoryEfficientReplayBuffer:
         self.rewards[self.size % self.max_size] = reward
         self.dones[self.size % self.max_size] = done
 
-        next_frame_idx = self._insert_frame(next_observation)
+        next_frame_idx = self._insert_frame(next_observation) # For example, current time step is t. We insert (t+1) frame to buffer, set buffer pointer to (t+2), next_frame_idx = (t+1)
 
         # Compute indices for the next observation.
-        next_framebuffer_idcs = self._compute_frame_history_idcs(
+        next_framebuffer_idcs = self._compute_frame_history_idcs( # For example, if next_frame_idx = 5 and beginning of trajectory is 2, next_framebuffer_idcs = [2, 2, 2, 2, 2, 2, 2, 3, 4, 5] (length of buffer is 10)
             next_frame_idx, self.current_trajectory_framebuffer_begin
         )
         self.next_observation_framebuffer_idcs[
-            self.size % self.max_size
+            self.size % self.max_size # max_size is capacity. self.max_frame_buffer_size is twice the capacity
         ] = next_framebuffer_idcs
 
         self.size += 1
